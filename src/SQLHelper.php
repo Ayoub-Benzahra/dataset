@@ -2,8 +2,17 @@
 
 trait SQLHelper
 {
-    protected function queryBuilder(array $fields, $table = '')
-    {
+    private function checkIfTableExists ($table) {
+        $tables = app('db')->connection()->getDoctrineSchemaManager()->listTableNames();
+
+        return in_array($table, $tables);
+    }
+
+    private function getTableColumns ($table) {
+        return app('db')->getSchemaBuilder()->getColumnListing($table);
+    }
+
+    protected function queryBuilder (array $fields, $table = '') {
         $table = $table ?: $this->table;
 
         if (empty($table)) {
@@ -11,11 +20,11 @@ trait SQLHelper
         }
 
         $query = sprintf("INSERT INTO %s (%s) VALUES (%s)", $table, implode(", ", array_values($fields)), implode(", ", array_fill(0, count($fields), "?")));
+
         return $query;
     }
 
-    protected function checkIfTableColumnsExist(array $updateColumns, $table = '')
-    {
+    protected function checkIfTableColumnsExist (array $updateColumns, $table = '') {
         $table = $table ?: $this->table;
 
         if (empty($table)) {
@@ -32,19 +41,7 @@ trait SQLHelper
             $difference = array_diff($updateColumns, $tableColumns);
             throw new DatasetException(sprintf("Unknown %s `%s` in table - `%s`", count($difference) == 1 ? "column" : "columns", implode(", ", $difference), $table));
         }
-        return true;
-    }
 
-    protected function checkIfTableExists($tableName)
-    {
-        $pdo = $this->connection->getPDO();
-        $query = "SHOW TABLES LIKE ?";
-        $statement = $pdo->prepare($query);
-        $statement->execute([$tableName]);
-        if ($statement->fetch()) {
-            return true;
-        } else {
-            return false;
-        }
+        return true;
     }
 }

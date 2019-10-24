@@ -1,202 +1,199 @@
 <?php namespace Dataset;
 
-use ICanBoogie\Inflector;
+use Illuminate\Container\Container;
+use Illuminate\Database\DatabaseManager;
 use League\Csv\Reader;
 
 abstract class Dataset
 {
-    use SQLHelper, Helper;
+    use SQLHelper;
 
-    /*
-     * CSV RELATED PROPERTIES
-     **/
-    protected $source = '';
-    protected $excludeHeader = true;
-    protected $delimiter = ',';
-    protected $enclosure = '"';
-    protected $escape = '\\';
-    protected $mapper = [];
-    protected $headerAsTableField = false;
-    protected $additionalFields = [];
-    protected $ignoreCsvColumns = [];
-    private $path = '';
+    const TAG = 'dataset::';
+    /* @var  Reader */
     private $reader = null;
+    private $container = null;
 
-    /*
-     * DATABASE RELATED PROPERTIES
-     **/
-    protected $table = '';
-    private $query = '';
-    private $connection = null;
-    private $inflector = null;
-
-    public function __construct(Connection $connection)
-    {
-        $this->connection = $connection;
-        $this->inflector = Inflector::get();
+    public function __construct (Container $container = null) {
+        $this->container = $container ?: new Container;
     }
 
-    /*
-     * CSV RELATED METHODS
-     **/
-    public function getAdditionalFields()
-    {
-        return (array)$this->additionalFields;
+    # ---------------------- CSV Properties -------------- #
+    // csv delimited by
+    protected function delimiter () {
+        return ',';
     }
 
-    public function getPath()
-    {
-        return (string)$this->path;
+    // csv value enclosure
+    protected function enclosure () {
+        return '"';
     }
 
-    public function getSource()
-    {
-        return (string)$this->source;
+    // csv escape character
+    protected function escapeCharacter () {
+        return '\\';
     }
 
-    public function getDelimiter()
-    {
-        return (string)$this->delimiter;
-    }
+    # ---------------------- Reader -------------- #
 
-    public function getMapper()
-    {
-        return (array)$this->mapper;
-    }
+    private function prepareReader () {
+        // https://csv.thephpleague.com/9.0/connections/#os-specificity
+        if (!ini_get("auto_detect_line_endings")) {
+            ini_set("auto_detect_line_endings", '1');
+        }
 
-    public function getHeaderAsTableField()
-    {
-        return (bool)$this->headerAsTableField;
-    }
+        /**
+         * uses string
+         *     ? create from string
+         *     : (
+         *           uses resource stream
+         *               ? create from stream
+         *               : create from the file
+         *       )
+         */
 
-    protected function getIgnoreCsvColumns()
-    {
-        return (array)$this->ignoreCsvColumns;
-    }
-
-    public function getExcludeHeader()
-    {
-        return (bool)$this->excludeHeader;
-    }
-
-    private function getReader()
-    {
-        return $this->reader;
-    }
-
-    public function getEnclosure()
-    {
-        return (string)$this->enclosure;
-    }
-
-    public function getEscape()
-    {
-        return (string)$this->escape;
-    }
-
-    private function setReader()
-    {
-        $this->reader = Reader::createFromPath($this->getSource());
-        $this->reader->setDelimiter($this->getDelimiter())
-                     ->setEnclosure($this->getEnclosure())
-                     ->setEscape($this->getEscape());
-
-        return $this;
-    }
-
-    public function import()
-    {
-        echo sprintf("\n-------------------------------- Importing From %s -----------------------------------------\n", get_class($this));
-        // check if the source is empty
-        if (empty(trim($this->source))) {
-            $this->path = dirname((new \ReflectionClass(static::class))->getFileName());
-            $this->source = $this->path . "/{$this->morphClassName()}.csv";
-            // check if the file exists, existence moved from below to here, cause realpath checks the file existence
-            if (!file_exists($this->source)) {
-                throw new DatasetException("`{$this->source}` does not exist.");
-            }
+        if ($s = $this->string()) {
+            $reader = Reader::createFromString($s);
+            $from = 'string';
+        } elseif ($resource = $this->stream()) {
+            $reader = Reader::createFromStream($resource);
+            $from = 'stream';
         } else {
-            // a source is defined,
-            // check the realpath of the source, false if does not exist
-            // running php script from relative location and relative source will collide.
-            $source = realpath($this->source);
-            if (!$source) {
-                // resolve the path via dir of the file
-                $source = realpath(__DIR__ . "/" . $this->source);
-                if (!$source) {
-                    // file doesn't even exist, throw exception
-                    throw new DatasetException("No file exists on `{$this->source}`.");
-                } else {
-                    // exists, add to source
-                    $this->source = $source;
-                }
-            } else {
-                // script ran from current location, relative path resolved.
-                $this->source = $source;
-            }
-            // no exception was raised, get the path of the source.
-            $this->path = dirname($this->source);
+            $reader = Reader::createFromPath($this->file());
+            $from = 'file';
         }
 
-        // check if table name exists, or generate
-        if (empty($this->table)) {
-            $this->table = $this->morphClassName();
+        $this->reader = $reader->setDelimiter($this->delimiter())
+                               ->setEnclosure($this->enclosure())
+                               ->setEscape($this->escapeCharacter());
+
+        return $from;
+    }
+
+    # ---------------------- DB Manager -------------- #
+
+    // database manager < app('db') / Illuminate\Database\DatabaseManager >
+    protected function dbManager () : DatabaseManager {
+        if ($this->container->bound('db')) {
+            return $this->container['db'];
         }
 
-        // check if table exists in database, otherwise throw exception
-        if (!$this->checkIfTableExists($this->table)) {
-            throw new DatasetException("No table exists named `{$this->table}`.");
+        throw new DatasetException('DatabaseManager should be implemented.');
+    }
+
+    # ---------------------- Table & Class behaviors -------------- #
+
+    // assume table name
+    protected function table () {
+        return morph_class_name($this);
+    }
+
+    // assume file name
+    protected function file () {
+        return morph_class_name($this) . ".csv";
+    }
+
+    // create from stream
+    protected function stream () {
+        return null;
+    }
+
+    // create from string
+    protected function string () {
+        return '';
+    }
+
+    // csv header name to table field mapper
+    protected function mapper () {
+        return [];
+    }
+
+    // omit table header row, true by default
+    protected function omitHeader () {
+        return true;
+    }
+
+    // additional fields while inserting data. 'key' => 'value' pair, closure can be passed as value
+    protected function additionalFields () {
+        return [];
+    }
+
+    // csv columns to ignore before inserting data
+    protected function ignoredColumns () {
+        return [];
+    }
+
+    // csv columns name === table field name
+    protected function headerAsTableField () {
+        return false;
+    }
+
+    # ---------------------- Events -------------- #
+
+    public function getEventDispatcher () {
+        if ($this->container->bound('events')) {
+            return $this->container['events'];
         }
+    }
 
-        // check if header is not present and no mapper is available, throw exception in this case.
-        if (false === $this->getHeaderAsTableField() && empty($this->getMapper())) {
-            throw new DatasetException("Mapper must be present in absence of header.");
+    private function broadcastEvent ($event, ...$args) {
+        // TODO: delete the echo when complete
+        echo sprintf("EVENT BROADCAST: %s == Args: <%s>%s", $event, implode(", ", $args), PHP_EOL);
+        if ($dispatcher = $this->getEventDispatcher()) {
+            $modifiedEvent = self::TAG . $event;
+            $dispatcher->dispatch(...array_merge([ $modifiedEvent ], $args));
         }
+    }
 
-        // check if constant fields exists, and not associative array
-        if (!empty($this->getAdditionalFields()) && !$this->isMultidimensionalArray($this->getAdditionalFields())) {
-            throw new DatasetException("Constant fields must be associative.");
-        }
+    # ---------------------- Handlers -------------- #
 
-        // check if ignored csv column is flat array or not
-		if ($this->isMultidimensionalArray($this->getIgnoreCsvColumns())) {
-			throw new DatasetException("Ignored CSV Columns cannot be associative array.");
-		}
-
-        // file exists, set the reader
-        $this->setReader();
-
-        // get the csv columns, inside the columns, all the column name must be there
-        // regardless of the database table entry
+    private function getCsvToTableColumns () {
         $columns = [];
-        // if the get header as table field is set, csv columns are those fields
-        if ($this->getHeaderAsTableField()) {
-            $csvColumns = array_map('trim', $this->getReader()->fetchOne());
-            $columns = array_combine($csvColumns, $csvColumns);
+        if ($this->headerAsTableField()) {
+            // this will exclude the header
+            $this->reader->setHeaderOffset(0);
+            // get the csv headers & make it an associative array, before TRIM the headers
+            $headers = array_map('trim', $this->reader->getHeader());
+            $columns = array_combine($headers, $headers);
         }
 
         // get the mapper by user
-        $userMapped = $this->getMapper();
-        if ($userMapped) {
-            $columns = array_merge($columns, $userMapped);
+        if ($mapper = $this->mapper()) {
+            /*// if the mapper is not an associative array, make it an assoc array
+            if (false === is_multidimensional_array($mapper)) {
+                $mapper = array_combine($mapper, $mapper);
+            }*/
+
+            $columns = array_merge($columns, $mapper);
         }
 
         // check if any columns is said to ignore/won't insert into database
-        $ignoredColumns = $this->getIgnoreCsvColumns();
-        if ($ignoredColumns) {
-            $ignoredColumns = array_combine(array_values($ignoredColumns), array_fill(0, count($ignoredColumns), false));
-            $columns = array_merge($columns, $ignoredColumns);
-        }
+        // flushing ignored columns will lead to bugs cause count(csv_columns) > count(finalized_columns)
+        /*if ($ignored = $this->ignoredColumns()) {
+            $ignored = array_combine($ignored, $ignored);
+            $columns = array_diff_key($columns, $ignored);
+        }*/
 
-        $mapper = [];
-        // STRUCTURE: ['csv_column' => 'table_column', 'csv_column2' => false, 'csv_column3' => ['table_column3', function($row){ return 'result' }];
+        return $columns;
+    }
+
+    private function validateCSVParser ($columns) {
+        // to keep the position of columns in place
+        $positionalColumns = [];
+        // STRUCTURE:
+        // [
+        //      'csv_column1' => 'table_column1', ~ 'csv_column1' => ['table_column1', null],
+        //      'csv_column2' => false, // invalid
+        //      'csv_column3' => [ 'table_column3', function($row) { return 'result'; } ], ~ 'csv_column3' => ['table_column3', 'callback']
+        //      'csv_column4' => function ($row) { return 'result'; }, ~ 'csv_column4 => ['csv_column4', 'callback'],
+        //      'csv_column5' => [ function ($row) { return 'result'; }], // invalid
+        //];
         // 1. ['user_name' => 'name', 'user_email' => 'email'];
         // 2. ['username' => 'name', 'password' => function($row){ return hash($row['password']); }]
         // 3. ['username' => 'name', 'password' => false, 'email', 'first_name' => function($row){ return $row['first_name'] . " " . $row['last_name'];}, 'last_name' => false];
         // 4. ['name', 'first_name', 'last_name', 'email'];
         // TABLE FIELDS VARIABLE STRUCTURE
         // [ 'csv_column' => ['table_column', null], 'csv_column3' => ['table_column3', function($row){ return 'result'; }]];
-        foreach ($columns as $csvColumn => $value) {
+        foreach ( $columns as $csvColumn => $value ) {
             // Before set the key on variable, trim the column name
             if (is_string($value)) {
                 $value = trim($value);
@@ -205,25 +202,66 @@ abstract class Dataset
                 // cases: 1. FROM header, 2: From mapper as flat element
                 // unset the element by key,
                 // set the value as the new key
-                unset($mapper[$csvColumn]);
-                $mapper[$value] = [$value, null];
+                // unset($columns[$csvColumn]);
+                $positionalColumns[$value] = [ $value, null ];
             } elseif (is_string($csvColumn) && is_string($value)) { // "EXAMPLE 3: username"
-                $mapper[$csvColumn] = [$value, null];
-            } elseif (is_string($csvColumn) && is_array($value)) { // "STRUCTURE: csv_column2"
-                $mapper[$csvColumn] = $value;
-            } elseif (is_string($csvColumn) && false === $value) { // "EXAMPLE: 3, password"
-                $mapper[$csvColumn] = false;
-                continue;
+                $positionalColumns[$csvColumn] = [ $value, null ];
+            } elseif (is_string($csvColumn) && is_array($value)) { // "STRUCTURE: csv_column3"
+                // forcing to follow ['csv_column3' => ['table_column3', function ($row) { return 'value'; }]]
+                if (2 != count($value) || !is_string($value[0]) || !is_callable($value[1])) {
+                    // empty table column name on $value[0] will raise exception on database
+                    $message = sprintf('Should have exactly two elements [string, callable]. `%s` on %s::$mapper.', is_string($csvColumn) ? $csvColumn : (string) $value, get_class($this));
+                    throw new DatasetException($message);
+                }
+                // TODO: change the hardcoded string
+                $positionalColumns[$csvColumn] = [ $value[0], 'callback' /*$value[1]*/ ];
+            } elseif (is_string($csvColumn) && is_callable($value)) { // "EXAMPLE: 3, password"
+                // TODO: change the hardcoded string
+                $positionalColumns[$csvColumn] = [ $csvColumn, 'callback' /*$value*/ ];
             } else {
-                $message = sprintf('Invalid `%s` on %s::$mapper.', is_string($csvColumn) ? $csvColumn : (string)$value, get_class($this));
+                $message = sprintf('Invalid `%s` of type <%s> on %s::$mapper.', is_string($csvColumn) ? $csvColumn : (is_callable($value) ? 'CALLABLE on ' . $csvColumn : (string) $value), gettype($value), get_class($this));
                 throw new DatasetException($message);
             }
         }
 
-        // EXCEPTIONS: ['csv_field' => false, 'csv_field2' => false]
-        if (empty($mapper)) {
+        return $positionalColumns;
+    }
+
+    // start importing csv to db
+    public function import () {
+        $this->broadcastEvent('starting', get_class($this));
+        $this->broadcastEvent('prepared-reader', $this->prepareReader());
+
+        $table = $this->table();
+        // TODO: uncomment table existence check
+        /*if (!$this->checkIfTableExists($table)) {
+            throw new DatasetException('Table ' . $table . ' does not exist.');
+        }*/
+        $this->broadcastEvent('table-exists', $table);
+
+        // check if constant fields exists, and not associative array
+        if (!empty($additionalFields = $this->additionalFields()) && !is_multidimensional_array($additionalFields)) {
+            throw new DatasetException("Additional fields must be associative array.");
+        }
+
+        // check if ignored csv column is flat array or not
+        if (($ignoredColumns = $this->ignoredColumns()) && is_multidimensional_array($ignoredColumns)) {
+            throw new DatasetException("Ignored CSV Columns cannot be associative array.");
+        }
+
+        $columns = $this->getCsvToTableColumns();
+        if (empty($columns)) {
+            throw new DatasetException("Table fields could not be decided from Headers & Mapper.");
+        }
+
+        $columns = $this->validateCSVParser($columns);
+        if (empty($columns)) {
             throw new DatasetException("Nothing to import from CSV.");
         }
+
+        var_dump($columns);
+
+        /*
         // insertable table fields are going to be the fields that has NOT FALSE VALUES
         // 1. filter the values if any $mapper value has NOT FALSE values
         $filteredMap = array_filter($mapper);
@@ -239,8 +277,7 @@ abstract class Dataset
         $this->query = $this->queryBuilder($insertAbleTableFields);
 
         // prepare the pdo statement
-        $statement = $this->connection->getPDO()
-									  ->prepare($this->query);
+        $statement = $this->connection->getPDO()->prepare($this->query);
 
         $pagination = 100;
         $current = 0;
@@ -269,14 +306,14 @@ abstract class Dataset
             $onCurrentPageResultCount = 0;
 
             // loop over the result set
-            foreach ($resultSet as $result) {
+            foreach ( $resultSet as $result ) {
                 // get the fields those are required to be taken from
                 $matchedKeys = array_intersect_key(array_keys($filteredMap), array_keys($result));
                 $values = [];
                 ++$onCurrentPageResultCount;
                 $currentRowNumber = $totalOffset + $onCurrentPageResultCount;
                 $stopCurrentRow = false;
-                foreach ($matchedKeys as $key) {
+                foreach ( $matchedKeys as $key ) {
                     // ['csv_column' => ['table_column', 'transformer()']]; @ position 1
                     // transform values if required
                     if (is_callable($mapper[$key][1])) {
@@ -301,7 +338,7 @@ abstract class Dataset
                 }
 
                 // check if the user wants to modify any value from current rows from constant fields
-                foreach ($this->getAdditionalFields() as $tableField => $operation) {
+                foreach ( $this->getAdditionalFields() as $tableField => $operation ) {
                     // if the user has set callback in constant field
                     // call the function or set the value
                     if (is_callable($operation)) {
@@ -334,13 +371,13 @@ abstract class Dataset
             if ($errorOccurred) {
                 break;
             }
-        } while ($shouldContinue);
+        } while ( $shouldContinue );
         echo sprintf("-------------------------------- Import Finished from %s --------------------------------\n", get_class($this));
-        return $errorOccurred;
+
+        return $errorOccurred;*/
     }
 
-    private function errorAlert($message = '', $row = 0, array $data = [])
-    {
+    private function errorAlert ($message = '', $row = 0, array $data = []) {
         if ($message) {
             echo sprintf("MESSAGE: %s\n", $message);
         }
