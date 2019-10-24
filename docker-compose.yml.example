@@ -1,0 +1,32 @@
+version: '2'
+
+services:
+    php:
+        build: .
+        volumes:
+            - .:/app
+        links:
+            - mysql
+            - postgres
+
+    mysql:
+        image: mysql:8.0.3
+        ports:
+            - 3306:3306
+        volumes:
+            - ${BACKUP_PATH}/mysql/dataset:/var/lib/mysql
+
+        environment:
+            - "MYSQL_ROOT_PASSWORD=secret"
+            - "MYSQL_DATABASE=dataset"
+
+    postgres:
+        image: postgres:10.4-alpine
+        ports:
+            - 5432:5432
+        volumes:
+            - ${BACKUP_PATH}/postgres/dataset:/var/lib/postgresql/data
+        environment:
+            - POSTGRES_USER=root
+            - POSTGRES_PASSWORD=secret
+            - POSTGRES_DB=dataset
