@@ -1,6 +1,7 @@
 <?php namespace Dataset;
 
 use Illuminate\Container\Container;
+use Illuminate\Database\ConnectionResolverInterface;
 use Illuminate\Database\DatabaseManager;
 use League\Csv\Reader;
 
@@ -53,31 +54,31 @@ abstract class Dataset
 
         if ($s = $this->string()) {
             $reader = Reader::createFromString($s);
-            $from = 'string';
+            $source = 'string';
         } elseif ($resource = $this->stream()) {
             $reader = Reader::createFromStream($resource);
-            $from = 'stream';
+            $source = 'stream';
         } else {
             $reader = Reader::createFromPath($this->file());
-            $from = 'file';
+            $source = 'file';
         }
 
         $this->reader = $reader->setDelimiter($this->delimiter())
                                ->setEnclosure($this->enclosure())
                                ->setEscape($this->escapeCharacter());
 
-        return $from;
+        return $source;
     }
 
     # ---------------------- DB Manager -------------- #
 
-    // database manager < app('db') / Illuminate\Database\DatabaseManager >
-    protected function dbManager () : DatabaseManager {
+    // database manager < app('db') / Illuminate\Database\ConnectionResolverInterface >
+    protected function dbManager () : ConnectionResolverInterface {
         if ($this->container->bound('db')) {
             return $this->container['db'];
         }
 
-        throw new DatasetException('DatabaseManager should be implemented.');
+        $this->raiseException('DatabaseManager should be implemented.');
     }
 
     # ---------------------- Table & Class behaviors -------------- #
@@ -176,7 +177,7 @@ abstract class Dataset
         return $columns;
     }
 
-    private function validateCSVParser ($columns) {
+    private function validateColumns ($columns) {
         // to keep the position of columns in place
         $positionalColumns = [];
         // STRUCTURE:
@@ -210,8 +211,8 @@ abstract class Dataset
                 // forcing to follow ['csv_column3' => ['table_column3', function ($row) { return 'value'; }]]
                 if (2 != count($value) || !is_string($value[0]) || !is_callable($value[1])) {
                     // empty table column name on $value[0] will raise exception on database
-                    $message = sprintf('Should have exactly two elements [string, callable]. `%s` on %s::$mapper.', is_string($csvColumn) ? $csvColumn : (string) $value, get_class($this));
-                    throw new DatasetException($message);
+                    $message = sprintf('Should have exactly two elements [string, callable]. For `%s` on %s::$mapper.', is_string($csvColumn) ? $csvColumn : (string) $value, get_class($this));
+                    $this->raiseException($message);
                 }
                 // TODO: change the hardcoded string
                 $positionalColumns[$csvColumn] = [ $value[0], 'callback' /*$value[1]*/ ];
@@ -220,11 +221,22 @@ abstract class Dataset
                 $positionalColumns[$csvColumn] = [ $csvColumn, 'callback' /*$value*/ ];
             } else {
                 $message = sprintf('Invalid `%s` of type <%s> on %s::$mapper.', is_string($csvColumn) ? $csvColumn : (is_callable($value) ? 'CALLABLE on ' . $csvColumn : (string) $value), gettype($value), get_class($this));
-                throw new DatasetException($message);
+                $this->raiseException($message);
             }
         }
 
         return $positionalColumns;
+    }
+
+    private function checkIfTableColumnsExist ($columns) {
+        // Merge the mapper columns with additional fields
+        // remove the ignored columns
+        $allColumns = array_diff(array_merge($columns, array_keys($this->additionalFields())), $this->ignoredColumns());
+        // get the columns from database
+        $tableColumns = $this->getTableColumns($this->table());
+        // find the diff from all columns to insert with the table columns, table columns can have extra fields
+        $diff = array_diff($allColumns, $tableColumns);
+        count($diff) == 0 ? true : $this->raiseException(sprintf('Columns (`%s`) not found in `%s` table.', implode("', '", $diff), $this->table()));
     }
 
     // start importing csv to db
@@ -235,31 +247,35 @@ abstract class Dataset
         $table = $this->table();
         // TODO: uncomment table existence check
         /*if (!$this->checkIfTableExists($table)) {
-            throw new DatasetException('Table ' . $table . ' does not exist.');
+            $this->raiseException('Table \'' . $table . '\' does not exist.');
         }*/
         $this->broadcastEvent('table-exists', $table);
 
         // check if constant fields exists, and not associative array
         if (!empty($additionalFields = $this->additionalFields()) && !is_multidimensional_array($additionalFields)) {
-            throw new DatasetException("Additional fields must be associative array.");
+            $this->raiseException("Additional fields must be associative array.");
         }
 
         // check if ignored csv column is flat array or not
         if (($ignoredColumns = $this->ignoredColumns()) && is_multidimensional_array($ignoredColumns)) {
-            throw new DatasetException("Ignored CSV Columns cannot be associative array.");
+            $this->raiseException("Ignored CSV Columns cannot be associative array.");
         }
 
+        // get the columns from header + mapper
         $columns = $this->getCsvToTableColumns();
         if (empty($columns)) {
-            throw new DatasetException("Table fields could not be decided from Headers & Mapper.");
+            $this->raiseException("Table fields could not be decided from Headers & Mapper.");
         }
 
-        $columns = $this->validateCSVParser($columns);
-        if (empty($columns)) {
-            throw new DatasetException("Nothing to import from CSV.");
-        }
+        // organize the columns, previous `getCsvToTableColumns` or the method will raise exception - no need to check for emptiness
+        $columns = $this->validateColumns($columns);
 
-        var_dump($columns);
+        // TODO: uncomment column existence check
+        /*$actualColumn = array_map(function ($each) {
+            return $each[0];
+        }, $columns);
+        $this->checkIfTableColumnsExist($actualColumn);*/
+        echo json_encode($columns, JSON_PRETTY_PRINT);
 
         /*
         // insertable table fields are going to be the fields that has NOT FALSE VALUES
@@ -377,16 +393,7 @@ abstract class Dataset
         return $errorOccurred;*/
     }
 
-    private function errorAlert ($message = '', $row = 0, array $data = []) {
-        if ($message) {
-            echo sprintf("MESSAGE: %s\n", $message);
-        }
-        if ($row) {
-            echo sprintf("CSV ROW: %d\n", $row);
-        }
-        if ($data) {
-            echo sprintf("VALUES: %s\n", json_encode($data));
-        }
-        echo PHP_EOL;
+    private function raiseException ($message) {
+        throw new DatasetException($message, 500);
     }
 }
