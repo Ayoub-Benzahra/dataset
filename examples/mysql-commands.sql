@@ -19,3 +19,7 @@ CREATE TABLE `dataset`.`employees` ( `employeeID` INT NOT NULL AUTO_INCREMENT , 
 -- CREATE products TABLE SQL
 CREATE TABLE `dataset`.`products` ( `id` INT NOT NULL AUTO_INCREMENT , `productName` VARCHAR(255) NOT NULL , `supplierID` INT NOT NULL , `categoryID` INT DEFAULT NULL , `quantityPerUnit` VARCHAR(255) NOT NULL , `unitPrice` DECIMAL NOT NULL , `unitsInStock` INT NOT NULL , `unitsOnOrder` INT NOT NULL , `reorderLevel` INT NOT NULL , `discontinued` TINYINT NOT NULL , `created_at` DATETIME NOT NULL , `updated_at` DATETIME NOT NULL , PRIMARY KEY (`id`)) ENGINE = InnoDB;
 -- products CREATE TABLE QUERY ENDS
+
+-- CREATE companies TABLE SQL
+CREATE TABLE `dataset`.`users` ( `id` INT NOT NULL AUTO_INCREMENT , `name` VARCHAR(255) NOT NULL , `email` VARCHAR(255) NOT NULL , `slug` VARCHAR(100) NOT NULL , `profile_picture` VARCHAR(100) NOT NULL , `password` VARCHAR(100) NOT NULL , `type` VARCHAR(20) NOT NULL , `created_at` DATETIME NULL , `updated_at` DATETIME NULL , `deleted_at` DATETIME NULL , PRIMARY KEY (`id`)) ENGINE = InnoDB;
+-- companies CREATE TABLE QUERY ENDS
