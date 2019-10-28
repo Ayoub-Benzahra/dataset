@@ -15,7 +15,6 @@ services:
             - 3306:3306
         volumes:
             - ${BACKUP_PATH}/mysql/dataset:/var/lib/mysql
-
         environment:
             - "MYSQL_ROOT_PASSWORD=secret"
             - "MYSQL_DATABASE=dataset"
