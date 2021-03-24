@@ -1,5 +1,5 @@
 {
-    "name": "anik/dataset",
+    "name": "benzahra/dataset",
     "description": "Dataset is a php package for importing & exporting data within CSV & Database",
     "type": "library",
     "license": "MIT",
@@ -23,7 +23,6 @@
     "require": {
         "php": ">=7.2",
         "league/csv": "^9.0",
-        "doctrine/inflector": "^1.4|^2.0",
         "laravel/framework": "^8.0"
     },
     "require-dev": {
